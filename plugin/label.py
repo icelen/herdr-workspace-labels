@@ -45,8 +45,56 @@ def herdr_bin():
     return env("HERDR_BIN_PATH", "herdr")
 
 
+_STATE_DIR = None
+
+
 def state_dir():
-    return env("HERDR_PLUGIN_STATE_DIR", os.path.join(env("TMPDIR", "/tmp"), "herdr-workspace-labels"))
+    """HERDR_PLUGIN_STATE_DIR only exists when herdr itself runs a manifest
+    command (an action, event hook, or startup hook). herdr-label is meant to
+    be run directly from a shell, which never sets it -- so derive the same
+    path herdr would use, from `herdr plugin config-dir`, which shares the
+    plugin id path-mangling and the app dir name (`herdr` vs `herdr-dev` for
+    a debug build) with the state dir, just under .config instead of
+    .local/state. That keeps this in step with whichever `herdr` binary is
+    actually on PATH, without hardcoding either piece."""
+    global _STATE_DIR
+    if _STATE_DIR is not None:
+        return _STATE_DIR
+
+    direct = env("HERDR_PLUGIN_STATE_DIR")
+    if direct:
+        _STATE_DIR = direct
+        return _STATE_DIR
+
+    fallback = os.path.join(env("TMPDIR", "/tmp"), "herdr-workspace-labels")
+    ok, out = run_herdr(["plugin", "config-dir", SOURCE])
+    config_dir = out.strip()
+    if not ok or not config_dir:
+        _STATE_DIR = fallback
+        return _STATE_DIR
+
+    # config_dir is "<config_root>/plugins/config/<id_component>".
+    id_component = os.path.basename(config_dir)
+    plugins_config = os.path.dirname(config_dir)
+    plugins = os.path.dirname(plugins_config)
+    config_root = os.path.dirname(plugins)
+    if os.path.basename(plugins_config) != "config" or os.path.basename(plugins) != "plugins" or not config_root:
+        _STATE_DIR = fallback
+        return _STATE_DIR
+    app_dir_name = os.path.basename(config_root)
+
+    xdg_state = env("XDG_STATE_HOME")
+    if xdg_state:
+        state_root = os.path.join(xdg_state, app_dir_name)
+    else:
+        home = env("HOME")
+        if not home:
+            _STATE_DIR = fallback
+            return _STATE_DIR
+        state_root = os.path.join(home, ".local", "state", app_dir_name)
+
+    _STATE_DIR = os.path.join(state_root, "plugins", id_component)
+    return _STATE_DIR
 
 
 # --------------------------------------------------------------------------
