@@ -1,0 +1,60 @@
+id = "personal.workspace-labels"
+name = "Workspace Labels"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Arbitrary persistent labels per workspace (env, phase, whatever you like), published as $<key> sidebar tokens on Space and Agent rows. Set with the herdr-label CLI; survives herdr restarts."
+platforms = ["macos", "linux"]
+
+# Render a label in config.toml by adding its token to a row of
+# [ui.sidebar.spaces] and/or [ui.sidebar.agents], e.g.:
+#   [ui.sidebar.spaces]
+#   rows = [
+#     ["state_icon", "workspace"],
+#     ["branch", "git_status"],
+#     [{ token = "$env", fg = "#89b4fa", bold = true }],
+#     [{ token = "$phase", fg = "#a6e3a1" }],
+#   ]
+# then `herdr server reload-config`.
+#
+# Set/clear labels from the herdr-label CLI (bin/ in this repo), which just
+# shells out to this script -- no plugin action needed for day-to-day use.
+
+[[actions]]
+id = "clear-all"
+title = "Clear all labels"
+description = "Remove every label from this workspace."
+contexts = ["workspace"]
+command = ["python3", "label.py", "clear-all"]
+
+# Agent rows read pane metadata, so a pane opened after its workspace was
+# labeled needs the tokens republished onto it.
+[[events]]
+on = "pane.created"
+command = ["python3", "label.py", "--republish"]
+
+[[events]]
+on = "pane.focused"
+command = ["python3", "label.py", "--republish"]
+
+[[events]]
+on = "workspace.created"
+command = ["python3", "label.py", "--republish"]
+
+[[events]]
+on = "workspace.focused"
+command = ["python3", "label.py", "--republish"]
+
+# A reopened worktree keeps the labels of its checkout path even under a new
+# workspace id.
+[[events]]
+on = "worktree.created"
+command = ["python3", "label.py", "--republish"]
+
+[[events]]
+on = "worktree.opened"
+command = ["python3", "label.py", "--republish"]
+
+# A token lives only in the running server, so this hook republishes every
+# workspace from labels.json when the server starts, then exits.
+[[startup]]
+command = ["python3", "label.py", "--publish-all"]

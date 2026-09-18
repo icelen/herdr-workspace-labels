@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Generic CLI for the herdr-workspace-labels plugin: set/clear/get arbitrary
+# persistent labels on the current herdr workspace.
+#
+# Usage:
+#   herdr-label set <key> <value>   set/update a label
+#   herdr-label clear <key>         clear one label
+#   herdr-label clear-all           clear every label on this workspace
+#   herdr-label get [key]           show one label, or all labels
+#   herdr-label list                show every workspace's saved labels
+#   herdr-label prune               drop entries for worktrees that are gone
+#
+# Must be run from inside the target worktree's herdr pane for set/clear/get
+# (relies on HERDR_WORKSPACE_ID, which herdr exports into every pane it
+# launches). `list` and `prune` work anywhere.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null && pwd)"
+
+exec python3 "$DIR/../plugin/label.py" "$@"

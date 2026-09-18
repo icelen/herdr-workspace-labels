@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# herdr-phase: tag the current herdr worktree/workspace with a work
+# phase/status (e.g. developing, rollout, cleanup, archived-not-removed --
+# free text, whatever vocabulary you like). Shows up in the herdr sidebar via
+# the $phase token (see config.toml). Persists across herdr restarts, via the
+# herdr-workspace-labels plugin.
+#
+# Usage:
+#   herdr-phase <phase-label>   set/update this worktree's phase/status
+#   herdr-phase --clear         clear this worktree's phase/status
+#   herdr-phase                 show the current phase/status for this worktree
+#
+# Must be run from inside the target worktree's herdr pane (relies on
+# HERDR_WORKSPACE_ID, which herdr exports into every pane it launches).
+
+set -euo pipefail
+
+HERDR_LABEL="$(dirname "${BASH_SOURCE[0]}")/herdr-label"
+
+case "${1:-}" in
+  "")
+    "$HERDR_LABEL" get phase
+    ;;
+  --clear)
+    "$HERDR_LABEL" clear phase
+    echo "cleared phase for workspace ${HERDR_WORKSPACE_ID:-?}"
+    ;;
+  -h|--help)
+    sed -n '2,15p' "${BASH_SOURCE[0]}"
+    ;;
+  *)
+    if [[ $# -ne 1 ]]; then
+      echo "usage: herdr-phase [<phase-label> | --clear]" >&2
+      exit 2
+    fi
+    "$HERDR_LABEL" set phase "$1"
+    echo "set phase for workspace ${HERDR_WORKSPACE_ID:-?} to $1"
+    ;;
+esac

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# herdr-env: tag the current herdr worktree/workspace with a test-env label,
+# so other worktrees/agents don't accidentally collide on the same env.
+# Shows up in the herdr sidebar via the $env token (see config.toml).
+#
+# Back-compat shim: same CLI as the old ad hoc script, now backed by the
+# persistent herdr-workspace-labels plugin, so the label survives herdr
+# restarts.
+#
+# Usage:
+#   herdr-env <env-label>   set/update this worktree's env tag
+#   herdr-env --clear       clear this worktree's env tag
+#   herdr-env               show the current env tag for this worktree
+#
+# Must be run from inside the target worktree's herdr pane (relies on
+# HERDR_WORKSPACE_ID, which herdr exports into every pane it launches).
+
+set -euo pipefail
+
+HERDR_LABEL="$(dirname "${BASH_SOURCE[0]}")/herdr-label"
+
+case "${1:-}" in
+  "")
+    "$HERDR_LABEL" get env
+    ;;
+  --clear)
+    "$HERDR_LABEL" clear env
+    echo "cleared env tag for workspace ${HERDR_WORKSPACE_ID:-?}"
+    ;;
+  -h|--help)
+    sed -n '2,17p' "${BASH_SOURCE[0]}"
+    ;;
+  *)
+    if [[ $# -ne 1 ]]; then
+      echo "usage: herdr-env [<env-label> | --clear]" >&2
+      exit 2
+    fi
+    "$HERDR_LABEL" set env "$1"
+    echo "tagged workspace ${HERDR_WORKSPACE_ID:-?} with env=$1"
+    ;;
+esac
