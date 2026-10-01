@@ -441,8 +441,43 @@ def prune():
 
 
 def context_workspace():
-    """The workspace an action, event, or direct CLI call applies to."""
-    return env("HERDR_WORKSPACE_ID") or json_str(env("HERDR_PLUGIN_CONTEXT_JSON"), "workspace_id")
+    """The workspace an action, event, or direct CLI call applies to.
+
+    herdr's own plugin runner passes its context. A direct CLI call matches the
+    current git checkout against each workspace's checkout first, because
+    HERDR_WORKSPACE_ID can name the wrong workspace: a shared Codex app-server
+    daemon runs every session's commands with the environment of whichever
+    pane started it."""
+    context = env("HERDR_PLUGIN_CONTEXT_JSON")
+    if context:
+        return env("HERDR_WORKSPACE_ID") or json_str(context, "workspace_id")
+    return checkout_workspace() or env("HERDR_WORKSPACE_ID")
+
+
+def checkout_workspace():
+    """The one workspace whose checkout is the git checkout containing the
+    current directory, or "" when there is none or it is ambiguous."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=HERDR_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    toplevel = done.stdout.decode("utf-8", "replace").strip() if done.returncode == 0 else ""
+    if not toplevel:
+        return ""
+    toplevel = os.path.realpath(toplevel)
+    matches = [
+        workspace_id
+        for workspace_id, checkout in workspaces()
+        if checkout and os.path.realpath(checkout) == toplevel
+    ]
+    return matches[0] if len(matches) == 1 else ""
 
 
 def usage():
