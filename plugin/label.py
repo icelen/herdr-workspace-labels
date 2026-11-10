@@ -36,7 +36,7 @@ HERDR_TIMEOUT = 10
 
 SORT_CONFIG_FILE = "sort.toml"
 DEFAULT_SORT_KEY = "phase"
-DEFAULT_SORT_ORDER = ["plan", "coding", "review", "testing", "rollout", "cleanup", "archived"]
+DEFAULT_SORT_ORDER = ["admin", "plan", "coding", "review", "testing", "rollout", "cleanup", "archived"]
 
 _MISSING = object()
 

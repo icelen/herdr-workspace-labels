@@ -89,7 +89,7 @@ The order lives in `sort.toml` in the plugin config dir
 
 ```toml
 key = "phase"            # "" turns sorting off
-order = ["plan", "coding", "review", "testing", "QA", "rollout", "cleanup", "archived"]
+order = ["admin", "plan", "coding", "review", "testing", "QA", "rollout", "cleanup", "archived"]
 ```
 
 Matching ignores case, and an entry also matches a value starting with it as
