@@ -76,6 +76,31 @@ herdr server reload-config
   republish a workspace's labels so a new pane or a reopened worktree picks
   them back up immediately.
 
+## Sorting worktrees by phase
+
+Inside each repo group, the linked worktrees are kept sorted by `$phase`.
+The main checkout stays first, groups stay where they are, and rows outside a
+group are never moved. The plugin re-sorts when you set or clear a phase,
+when a worktree is created or reopened, and when herdr starts. Run
+`herdr-label sort --dry-run` to preview, or `herdr-label sort` to re-sort now.
+
+The order lives in `sort.toml` in the plugin config dir
+(`herdr plugin config-dir personal.workspace-labels`):
+
+```toml
+key = "phase"            # "" turns sorting off
+order = ["plan", "coding", "review", "testing", "QA", "rollout", "cleanup", "archived"]
+```
+
+Matching ignores case, and an entry also matches a value starting with it as
+a whole word (`archived` covers `archived - keep`). Values not listed sort
+after the listed ones alphabetically, and worktrees without a phase go last.
+Equal phases keep their current order. Reading `sort.toml` needs Python
+3.11+; older Pythons use the built-in default order.
+
+This reorders herdr's real workspace list (via `workspace.move_block`), so
+the order persists across restarts and every attached client sees it.
+
 ## Maintenance
 
 herdr doesn't know when a worktree is deleted, so a removed worktree's label

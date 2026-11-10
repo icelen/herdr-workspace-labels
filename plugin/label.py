@@ -9,8 +9,12 @@
 #   python3 label.py get [key]           print one label, or all labels, no herdr calls
 #   python3 label.py list                print every workspace's saved labels
 #   python3 label.py prune               drop entries whose checkout path is gone
+#   python3 label.py sort [--dry-run]    sort each repo group's worktrees by label
 #   python3 label.py --republish         (event hook) re-publish this workspace's labels
 #   python3 label.py --publish-all       (startup hook) re-publish every workspace
+#
+# Add --sort to either hook to also re-sort afterwards. Setting or clearing
+# the sort label re-sorts on its own.
 #
 # A sidebar token lives only in the running server, while a label is the
 # user's own state, so labels are kept in labels.json under the plugin state
@@ -30,6 +34,10 @@ STATE_FILE = "labels.json"
 STATE_VERSION = 1
 HERDR_TIMEOUT = 10
 
+SORT_CONFIG_FILE = "sort.toml"
+DEFAULT_SORT_KEY = "phase"
+DEFAULT_SORT_ORDER = ["plan", "coding", "review", "testing", "rollout", "cleanup", "archived"]
+
 _MISSING = object()
 
 
@@ -46,6 +54,20 @@ def herdr_bin():
 
 
 _STATE_DIR = None
+_CONFIG_DIR = None
+
+
+def config_dir():
+    """HERDR_PLUGIN_CONFIG_DIR when herdr runs the command, else what
+    `herdr plugin config-dir` prints (which also creates it). "" when neither
+    is available."""
+    global _CONFIG_DIR
+    if _CONFIG_DIR is None:
+        _CONFIG_DIR = env("HERDR_PLUGIN_CONFIG_DIR")
+        if not _CONFIG_DIR:
+            ok, out = run_herdr(["plugin", "config-dir", SOURCE])
+            _CONFIG_DIR = out.strip() if ok else ""
+    return _CONFIG_DIR
 
 
 def state_dir():
@@ -67,15 +89,14 @@ def state_dir():
         return _STATE_DIR
 
     fallback = os.path.join(env("TMPDIR", "/tmp"), "herdr-workspace-labels")
-    ok, out = run_herdr(["plugin", "config-dir", SOURCE])
-    config_dir = out.strip()
-    if not ok or not config_dir:
+    config = config_dir()
+    if not config:
         _STATE_DIR = fallback
         return _STATE_DIR
 
-    # config_dir is "<config_root>/plugins/config/<id_component>".
-    id_component = os.path.basename(config_dir)
-    plugins_config = os.path.dirname(config_dir)
+    # config is "<config_root>/plugins/config/<id_component>".
+    id_component = os.path.basename(config)
+    plugins_config = os.path.dirname(config)
     plugins = os.path.dirname(plugins_config)
     config_root = os.path.dirname(plugins)
     if os.path.basename(plugins_config) != "config" or os.path.basename(plugins) != "plugins" or not config_root:
@@ -117,6 +138,56 @@ def run_herdr(args, capture=True):
         return False, ""
     out = done.stdout.decode("utf-8", "replace") if capture and done.stdout else ""
     return done.returncode == 0, out
+
+
+def socket_path():
+    """HERDR_SOCKET_PATH when herdr exported it, else the socket the `herdr`
+    on PATH reports, so a plain shell outside a pane still reaches it."""
+    path = env("HERDR_SOCKET_PATH")
+    if path:
+        return path
+    _, out = run_herdr(["status", "server"])
+    for line in out.splitlines():
+        name, _, value = line.partition(":")
+        if name.strip() == "socket" and value.strip():
+            return value.strip()
+    return ""
+
+
+def socket_request(method, params):
+    """One raw socket API request, for methods the CLI doesn't wrap. Returns
+    the response's result, or None after logging an error."""
+    import socket
+
+    path = socket_path()
+    if not path:
+        log("%s: no herdr socket found" % method)
+        return None
+    request = json.dumps({"id": SOURCE, "method": method, "params": params}) + "\n"
+    received = b""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(HERDR_TIMEOUT)
+            connection.connect(path)
+            connection.sendall(request.encode("utf-8"))
+            while b"\n" not in received:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                received += chunk
+    except OSError as error:
+        log("%s: %s" % (method, error))
+        return None
+    try:
+        response = json.loads(received.split(b"\n", 1)[0].decode("utf-8", "replace"))
+    except ValueError:
+        log("%s: unreadable response" % method)
+        return None
+    error = response.get("error") if isinstance(response, dict) else None
+    if error:
+        log("%s: %s" % (method, error.get("message") if isinstance(error, dict) else error))
+        return None
+    return response.get("result") if isinstance(response, dict) else None
 
 
 # --------------------------------------------------------------------------
@@ -344,8 +415,126 @@ def publish_all():
 
 
 # --------------------------------------------------------------------------
+# Sorting
+# --------------------------------------------------------------------------
+
+
+def load_sort_config():
+    """(key, order) from sort.toml in the plugin config dir, falling back to
+    DEFAULT_SORT_KEY/DEFAULT_SORT_ORDER. An empty key turns sorting off."""
+    key, order = DEFAULT_SORT_KEY, DEFAULT_SORT_ORDER
+    directory = config_dir()
+    path = os.path.join(directory, SORT_CONFIG_FILE) if directory else ""
+    if not path or not os.path.exists(path):
+        return key, order
+    try:
+        import tomllib
+    except ImportError:
+        log("%s: needs python 3.11+ to read, using the defaults" % path)
+        return key, order
+    try:
+        with open(path, "rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, ValueError) as error:
+        log("%s: %s, using the defaults" % (path, error))
+        return key, order
+    if isinstance(document.get("key"), str):
+        key = document["key"]
+    if isinstance(document.get("order"), list):
+        order = [value for value in document["order"] if isinstance(value, str) and value]
+    return key, order
+
+
+def sort_rank(value, order):
+    """Where a label value sorts: its first matching entry in `order`, then
+    values not in `order` alphabetically, then no value at all. An entry
+    matches the whole value or its leading word, so `archived` also covers
+    `archived - keep`."""
+    if not value:
+        return (2, "")
+    lowered = value.lower()
+    for index, entry in enumerate(order):
+        entry = entry.lower()
+        if lowered == entry or (lowered.startswith(entry) and not lowered[len(entry)].isalnum()):
+            return (0, index)
+    return (1, lowered)
+
+
+def sorted_group(members, labels_of, key, order):
+    """A repo group's ids in their sorted order: the group's main checkouts
+    (as the sidebar always lists them first) and then its linked worktrees by
+    label, keeping the current order between equal labels."""
+    parents = [m for m in members if not m["worktree"].get("is_linked_worktree")]
+    children = [m for m in members if m["worktree"].get("is_linked_worktree")]
+    children.sort(key=lambda m: sort_rank(labels_of(m).get(key, ""), order))
+    return [m["workspace_id"] for m in parents + children]
+
+
+def sort_workspaces(dry_run=False):
+    """Sort the linked worktrees inside each repo group by the sort label.
+    Groups stay where they are and workspaces outside a group are never
+    moved. A group the sidebar doesn't show as one (no main checkout open)
+    is left alone too."""
+    key, order = load_sort_config()
+    if not key:
+        return True
+    records = [r for r in workspace_records() if isinstance(r.get("number"), int)]
+    records.sort(key=lambda r: r["number"])
+    state = load_state()
+
+    def labels_of(record):
+        return state.get(key_for(record["workspace_id"], checkout_path(record)), {})
+
+    groups = {}
+    for record in records:
+        worktree = record.get("worktree")
+        if isinstance(worktree, dict) and worktree.get("repo_key"):
+            groups.setdefault(worktree["repo_key"], []).append(record)
+
+    ok = True
+    for repo_key, members in groups.items():
+        if all(m["worktree"].get("is_linked_worktree") for m in members):
+            continue
+        current = [m["workspace_id"] for m in members]
+        wanted = sorted_group(members, labels_of, key, order)
+        if wanted == current:
+            continue
+        if dry_run:
+            names = {r["workspace_id"]: r.get("label", r["workspace_id"]) for r in members}
+            print("%s:" % repo_key)
+            for workspace_id in wanted:
+                value = labels_of(next(m for m in members if m["workspace_id"] == workspace_id)).get(key, "")
+                print("  %-12s %s" % (value or "-", names[workspace_id]))
+            continue
+        # The sidebar puts a group where its first member is, so put the
+        # block back before whatever followed that member.
+        ids = [r["workspace_id"] for r in records]
+        first = ids.index(current[0])
+        before = next((i for i in ids[first + 1:] if i not in current), None)
+        params = {"workspace_ids": wanted}
+        if before:
+            params["before_workspace_id"] = before
+        result = socket_request("workspace.move_block", params)
+        if result is None:
+            ok = False
+            continue
+        moved = [w for w in result.get("workspaces", []) if isinstance(w, dict)]
+        if moved:
+            records = moved
+    return ok
+
+
+# --------------------------------------------------------------------------
 # Changing labels
 # --------------------------------------------------------------------------
+
+
+def resort_if_sort_key(token):
+    """Re-sort after the sort label changed. A failed sort only logs: the
+    label itself was saved and published."""
+    key, _ = load_sort_config()
+    if key and token == key:
+        sort_workspaces()
 
 
 def set_label(workspace_id, token, value):
@@ -357,7 +546,9 @@ def set_label(workspace_id, token, value):
     state[key] = labels
     if not save_state(state):
         return False
-    return publish_token(workspace_id, token, value)
+    ok = publish_token(workspace_id, token, value)
+    resort_if_sort_key(token)
+    return ok
 
 
 def clear_label(workspace_id, token):
@@ -372,7 +563,9 @@ def clear_label(workspace_id, token):
         state.pop(key, None)
     if not save_state(state):
         return False
-    return publish_token(workspace_id, token, "")
+    ok = publish_token(workspace_id, token, "")
+    resort_if_sort_key(token)
+    return ok
 
 
 def clear_all(workspace_id):
@@ -386,6 +579,9 @@ def clear_all(workspace_id):
     for token in labels:
         if not publish_token(workspace_id, token, ""):
             ok = False
+    sort_key, _ = load_sort_config()
+    if sort_key in labels:
+        resort_if_sort_key(sort_key)
     return ok
 
 
@@ -495,14 +691,23 @@ def main(argv):
     option = argv[0] if argv else ""
 
     if option == "--publish-all":
-        return 0 if publish_all() else 1
+        ok = publish_all()
+        if "--sort" in argv[1:] and not sort_workspaces():
+            ok = False
+        return 0 if ok else 1
 
     if option == "--republish":
         workspace = context_workspace()
         if not workspace:
             log("no workspace in context")
             return 1
-        return 0 if republish_workspace(workspace) else 1
+        ok = republish_workspace(workspace)
+        if "--sort" in argv[1:] and not sort_workspaces():
+            ok = False
+        return 0 if ok else 1
+
+    if option == "sort":
+        return 0 if sort_workspaces(dry_run="--dry-run" in argv[1:]) else 1
 
     if option == "list":
         show_list()

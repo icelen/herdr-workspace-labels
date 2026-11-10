@@ -18,6 +18,10 @@ platforms = ["macos", "linux"]
 #
 # Set/clear labels from the herdr-label CLI (bin/ in this repo), which just
 # shells out to this script -- no plugin action needed for day-to-day use.
+#
+# Linked worktrees inside each repo group are kept sorted by one label
+# ($phase by default); see sort.toml in `herdr plugin config-dir
+# personal.workspace-labels`.
 
 [[actions]]
 id = "clear-all"
@@ -38,23 +42,25 @@ command = ["python3", "label.py", "--republish"]
 
 [[events]]
 on = "workspace.created"
-command = ["python3", "label.py", "--republish"]
+command = ["python3", "label.py", "--republish", "--sort"]
 
 [[events]]
 on = "workspace.focused"
 command = ["python3", "label.py", "--republish"]
 
 # A reopened worktree keeps the labels of its checkout path even under a new
-# workspace id.
+# workspace id. A new or reopened worktree lands at the end of its group, so
+# these also re-sort it into place.
 [[events]]
 on = "worktree.created"
-command = ["python3", "label.py", "--republish"]
+command = ["python3", "label.py", "--republish", "--sort"]
 
 [[events]]
 on = "worktree.opened"
-command = ["python3", "label.py", "--republish"]
+command = ["python3", "label.py", "--republish", "--sort"]
 
 # A token lives only in the running server, so this hook republishes every
-# workspace from labels.json when the server starts, then exits.
+# workspace from labels.json when the server starts, then exits. It also
+# re-sorts, picking up sort.toml changes made while herdr was down.
 [[startup]]
-command = ["python3", "label.py", "--publish-all"]
+command = ["python3", "label.py", "--publish-all", "--sort"]

@@ -9,10 +9,11 @@
 #   herdr-label get [key]           show one label, or all labels
 #   herdr-label list                show every workspace's saved labels
 #   herdr-label prune               drop entries for worktrees that are gone
+#   herdr-label sort [--dry-run]    re-sort each repo group's worktrees now
 #
 # Must be run from inside the target worktree's herdr pane for set/clear/get
 # (relies on HERDR_WORKSPACE_ID, which herdr exports into every pane it
-# launches). `list` and `prune` work anywhere.
+# launches). `list`, `prune` and `sort` work anywhere.
 
 set -euo pipefail
 
